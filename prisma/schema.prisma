@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String               @id
+  name          String
+  email         String               @unique
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sessions      Session[]
+  accounts      Account[]
+  installations GithubInstallation[]
+  connections   RepoConnection[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  @@unique([identifier, value])
+}
+
+model GithubInstallation {
+  id            String   @id @default(cuid())
+  userId        String
+  installationId BigInt
+  accountLogin  String?
+  accountType   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connections   RepoConnection[]
+
+  @@unique([userId, installationId])
+  @@index([installationId])
+}
+
+model RepoConnection {
+  id             String   @id @default(cuid())
+  userId         String
+  installationId BigInt
+  repositoryId   BigInt
+  repositoryName String
+  repositoryFullName String
+  defaultBranch  String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  installation   GithubInstallation @relation(fields: [userId, installationId], references: [userId, installationId], onDelete: Cascade)
+
+  @@unique([userId, repositoryId])
+  @@index([userId, installationId])
+}

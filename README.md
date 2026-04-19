@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# dbt-generator
 
-## Getting Started
+This app now includes:
 
-First, run the development server:
+- Better Auth login with GitHub OAuth
+- GitHub App installation flow
+- Explicit repository connection per user
+- Live read access to dbt project files on the default branch
+- Draft PR creation on a fresh `dbt-generator/*` branch
+
+## Local setup
+
+1. Install dependencies (this repo uses [Bun](https://bun.sh)):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+If Bun reports blocked postinstall scripts, run `bun pm untrusted` and approve **`prisma`** so the CLI/client tooling can install correctly. This repo lists `prisma` under `trustedDependencies` to reduce friction.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+2. Copy environment variables:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.example .env.local
+```
 
-## Learn More
+3. Fill in all required values in `.env.local`.
 
-To learn more about Next.js, take a look at the following resources:
+4. Create/update the database schema and generate Prisma client:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+This project uses **Prisma ORM 7** with `prisma.config.ts` (database URL is no longer in `schema.prisma`) and a **PostgreSQL driver adapter** (`@prisma/adapter-pg` + `pg`). The generated client is written to `generated/prisma/` (gitignored).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+bunx prisma generate
+bunx prisma db push
+```
 
-## Deploy on Vercel
+`prisma.config.ts` loads `.env` then `.env.local` (with override) so the CLI picks up `DATABASE_URL` the same way you expect locally.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+5. Run the app:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+bun run dev
+```
+
+`bun run build` runs `prisma generate` before `next build`, so production builds also emit the client.
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## GitHub configuration
+
+You need two GitHub integrations:
+
+- **GitHub OAuth App** for user login (used by Better Auth)
+- **GitHub App** for repository access + PR creation
+
+### OAuth App
+
+- Set callback URL to:
+  - `http://localhost:3000/api/auth/callback/github`
+
+### GitHub App
+
+- Permissions:
+  - Repository metadata: **Read-only**
+  - Contents: **Read & write**
+  - Pull requests: **Read & write**
+- Installation target: user + organizations
+- Setup URL:
+  - `http://localhost:3000/api/github/install/callback`
+- After creating the app, copy:
+  - App ID
+  - App slug
+  - Private key (PEM)
+
+## Safety constraints implemented
+
+- Repo writes are blocked outside dbt path allowlist (`models/**`, `macros/**`, `seeds/**`, `snapshots/**`, `analyses/**`, `tests/**`, and top-level dbt config files).
+- PRs always target the default branch.
+- Every generation uses a fresh branch.
+- PRs are created as draft by default.
