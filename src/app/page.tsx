@@ -3,6 +3,11 @@
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
 import { buildDbtConfigBlock, replaceLeadingDbtConfigBlock } from "@/lib/dbt-config";
+import {
+  dataPlatformLabels,
+  dataPlatforms,
+  type DataPlatform,
+} from "@/lib/data-platforms";
 import { Dialog } from "@base-ui/react/dialog";
 import { KeyboardEvent, useEffect, useMemo, useState } from "react";
 
@@ -17,6 +22,10 @@ const materializationOptions = [
 const initialMaterialization: (typeof materializationOptions)[number] = "view";
 const initialIsEnabled = true;
 const initialTags: string[] = [];
+const initialUniqueKey = "";
+const initialDatabase = "";
+const initialSchema = "";
+const initialAlias = "";
 const initialSqlBody = "select *\nfrom {{ ref('source_model') }}";
 
 export default function Home() {
@@ -28,6 +37,10 @@ export default function Home() {
         materialization: initialMaterialization,
         isEnabled: initialIsEnabled,
         tags: initialTags,
+        uniqueKey: initialUniqueKey,
+        database: initialDatabase,
+        schema: initialSchema,
+        alias: initialAlias,
       })}\n\n${initialSqlBody}`,
   );
   const [generatedPath, setGeneratedPath] = useState("models/generated/new_model.sql");
@@ -35,6 +48,10 @@ export default function Home() {
   const [prBody, setPrBody] = useState("Automated changes created by dbt-generator.");
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>(initialTags);
+  const [uniqueKey, setUniqueKey] = useState(initialUniqueKey);
+  const [database, setDatabase] = useState(initialDatabase);
+  const [schema, setSchema] = useState(initialSchema);
+  const [alias, setAlias] = useState(initialAlias);
   const [materialization, setMaterialization] =
     useState<(typeof materializationOptions)[number]>(initialMaterialization);
   const [installations, setInstallations] = useState<
@@ -56,6 +73,7 @@ export default function Home() {
       id: string;
       repositoryFullName: string;
       defaultBranch: string;
+      dataPlatform: DataPlatform | null;
     }>
   >([]);
   const [activeConnectionId, setActiveConnectionId] = useState("");
@@ -97,11 +115,19 @@ export default function Home() {
     materialization?: (typeof materializationOptions)[number];
     isEnabled?: boolean;
     tags?: string[];
+    uniqueKey?: string;
+    database?: string;
+    schema?: string;
+    alias?: string;
   }) {
     const block = buildDbtConfigBlock({
       materialization: overrides.materialization ?? materialization,
       isEnabled: overrides.isEnabled ?? isEnabled,
       tags: overrides.tags ?? tags,
+      uniqueKey: overrides.uniqueKey ?? uniqueKey,
+      database: overrides.database ?? database,
+      schema: overrides.schema ?? schema,
+      alias: overrides.alias ?? alias,
     });
     setSql((prev) => replaceLeadingDbtConfigBlock(prev, block));
   }
@@ -147,6 +173,26 @@ export default function Home() {
     syncSqlBlock({ materialization: option });
   }
 
+  function handleUniqueKeyChange(nextValue: string) {
+    setUniqueKey(nextValue);
+    syncSqlBlock({ uniqueKey: nextValue });
+  }
+
+  function handleDatabaseChange(nextValue: string) {
+    setDatabase(nextValue);
+    syncSqlBlock({ database: nextValue });
+  }
+
+  function handleSchemaChange(nextValue: string) {
+    setSchema(nextValue);
+    syncSqlBlock({ schema: nextValue });
+  }
+
+  function handleAliasChange(nextValue: string) {
+    setAlias(nextValue);
+    syncSqlBlock({ alias: nextValue });
+  }
+
   async function refreshGitHubState() {
     if (!isAuthed) {
       return;
@@ -182,6 +228,7 @@ export default function Home() {
           id: string;
           repositoryFullName: string;
           defaultBranch: string;
+          dataPlatform: DataPlatform | null;
         }>;
       };
 
@@ -256,6 +303,31 @@ export default function Home() {
       setErrorMessage(error instanceof Error ? error.message : "Unknown error");
     } finally {
       setIsBusy(false);
+    }
+  }
+
+  async function updateDataPlatform(connectionId: string, nextPlatform: DataPlatform | null) {
+    setConnections((prev) =>
+      prev.map((connection) =>
+        connection.id === connectionId
+          ? { ...connection, dataPlatform: nextPlatform }
+          : connection,
+      ),
+    );
+    setErrorMessage("");
+    try {
+      const response = await fetch("/api/github/connections", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ connectionId, dataPlatform: nextPlatform }),
+      });
+      if (!response.ok) {
+        const errorBody = (await response.json()) as { error?: string };
+        throw new Error(errorBody.error ?? "Could not update data platform");
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unknown error");
+      await refreshGitHubState();
     }
   }
 
@@ -526,6 +598,29 @@ export default function Home() {
                       </option>
                     ))}
                   </select>
+                  {activeConnection ? (
+                    <label className="mt-3 block">
+                      <span className="text-sm font-medium text-foreground">Data platform</span>
+                      <select
+                        value={activeConnection.dataPlatform ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          void updateDataPlatform(
+                            activeConnection.id,
+                            value === "" ? null : (value as DataPlatform),
+                          );
+                        }}
+                        className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
+                      >
+                        <option value="">Select a platform…</option>
+                        {dataPlatforms.map((platform) => (
+                          <option key={platform} value={platform}>
+                            {dataPlatformLabels[platform]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button type="button" variant="outline" disabled={isBusy} onClick={readDbtFiles}>
                       Read dbt files
@@ -614,6 +709,59 @@ export default function Home() {
                 ) : (
                   <p className="text-sm text-muted-foreground">No tags yet.</p>
                 )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
+              <div className="mb-4">
+                <h2 className="text-lg font-medium text-foreground">Unique key</h2>
+                <p className="text-sm text-muted-foreground">
+                  Column (or comma-separated columns) that uniquely identifies a row.
+                </p>
+              </div>
+              <input
+                value={uniqueKey}
+                onChange={(event) => handleUniqueKeyChange(event.target.value)}
+                placeholder="e.g. id"
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
+              />
+            </div>
+
+            <div className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
+              <div className="mb-4">
+                <h2 className="text-lg font-medium text-foreground">Location overrides</h2>
+                <p className="text-sm text-muted-foreground">
+                  Optional. Override where this model materializes.
+                </p>
+              </div>
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="text-sm font-medium text-foreground">Database</span>
+                  <input
+                    value={database}
+                    onChange={(event) => handleDatabaseChange(event.target.value)}
+                    placeholder="e.g. analytics"
+                    className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-foreground">Schema</span>
+                  <input
+                    value={schema}
+                    onChange={(event) => handleSchemaChange(event.target.value)}
+                    placeholder="e.g. marts"
+                    className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-foreground">Alias</span>
+                  <input
+                    value={alias}
+                    onChange={(event) => handleAliasChange(event.target.value)}
+                    placeholder="e.g. customers"
+                    className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
+                  />
+                </label>
               </div>
             </div>
 

@@ -64,32 +64,33 @@ model Verification {
 }
 
 model GithubInstallation {
-  id            String   @id @default(cuid())
-  userId        String
+  id             String           @id @default(cuid())
+  userId         String
   installationId BigInt
-  accountLogin  String?
-  accountType   String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  connections   RepoConnection[]
+  accountLogin   String?
+  accountType    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connections    RepoConnection[]
 
   @@unique([userId, installationId])
   @@index([installationId])
 }
 
 model RepoConnection {
-  id             String   @id @default(cuid())
-  userId         String
-  installationId BigInt
-  repositoryId   BigInt
-  repositoryName String
+  id                 String             @id @default(cuid())
+  userId             String
+  installationId     BigInt
+  repositoryId       BigInt
+  repositoryName     String
   repositoryFullName String
-  defaultBranch  String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  installation   GithubInstallation @relation(fields: [userId, installationId], references: [userId, installationId], onDelete: Cascade)
+  defaultBranch      String
+  dataPlatform       String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  installation       GithubInstallation @relation(fields: [userId, installationId], references: [userId, installationId], onDelete: Cascade)
 
   @@unique([userId, repositoryId])
   @@index([userId, installationId])
