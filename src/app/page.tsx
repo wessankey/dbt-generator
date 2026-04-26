@@ -2,6 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
+import { buildDbtConfigBlock, replaceLeadingDbtConfigBlock } from "@/lib/dbt-config";
+import { Dialog } from "@base-ui/react/dialog";
 import { KeyboardEvent, useEffect, useMemo, useState } from "react";
 
 const materializationOptions = [
@@ -12,17 +14,29 @@ const materializationOptions = [
   "incremental",
 ] as const;
 
+const initialMaterialization: (typeof materializationOptions)[number] = "view";
+const initialIsEnabled = true;
+const initialTags: string[] = [];
+const initialSqlBody = "select *\nfrom {{ ref('source_model') }}";
+
 export default function Home() {
   const { data: session, isPending: isSessionPending } = authClient.useSession();
-  const [isEnabled, setIsEnabled] = useState(true);
-  const [sql, setSql] = useState("select *\nfrom {{ ref('source_model') }}");
+  const [isEnabled, setIsEnabled] = useState(initialIsEnabled);
+  const [sql, setSql] = useState(
+    () =>
+      `${buildDbtConfigBlock({
+        materialization: initialMaterialization,
+        isEnabled: initialIsEnabled,
+        tags: initialTags,
+      })}\n\n${initialSqlBody}`,
+  );
   const [generatedPath, setGeneratedPath] = useState("models/generated/new_model.sql");
   const [prTitle, setPrTitle] = useState("Generate dbt model updates");
   const [prBody, setPrBody] = useState("Automated changes created by dbt-generator.");
   const [tagInput, setTagInput] = useState("");
-  const [tags, setTags] = useState<string[]>(["core", "finance"]);
+  const [tags, setTags] = useState<string[]>(initialTags);
   const [materialization, setMaterialization] =
-    useState<(typeof materializationOptions)[number]>("view");
+    useState<(typeof materializationOptions)[number]>(initialMaterialization);
   const [installations, setInstallations] = useState<
     Array<{
       installationId: string;
@@ -56,12 +70,41 @@ export default function Home() {
     [activeConnectionId, connections],
   );
 
+  const githubStatus: "checking" | "not-signed-in" | "needs-setup" | "connected" =
+    isSessionPending
+      ? "checking"
+      : !isAuthed
+        ? "not-signed-in"
+        : connections.length > 0
+          ? "connected"
+          : "needs-setup";
+
+  const statusBadge = {
+    checking: { label: "Checking…", dot: "bg-muted-foreground/40 animate-pulse" },
+    "not-signed-in": { label: "Not connected", dot: "bg-muted-foreground/60" },
+    "needs-setup": { label: "Setup required", dot: "bg-amber-500" },
+    connected: { label: "Connected", dot: "bg-emerald-500" },
+  }[githubStatus];
+
   useEffect(() => {
     if (!isAuthed) return;
 
     void refreshGitHubState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed]);
+
+  function syncSqlBlock(overrides: {
+    materialization?: (typeof materializationOptions)[number];
+    isEnabled?: boolean;
+    tags?: string[];
+  }) {
+    const block = buildDbtConfigBlock({
+      materialization: overrides.materialization ?? materialization,
+      isEnabled: overrides.isEnabled ?? isEnabled,
+      tags: overrides.tags ?? tags,
+    });
+    setSql((prev) => replaceLeadingDbtConfigBlock(prev, block));
+  }
 
   function addTag() {
     const nextTag = tagInput.trim();
@@ -73,7 +116,9 @@ export default function Home() {
       (existingTag) => existingTag.toLowerCase() === nextTag.toLowerCase(),
     );
     if (!alreadyAdded) {
-      setTags((currentTags) => [...currentTags, nextTag]);
+      const nextTags = [...tags, nextTag];
+      setTags(nextTags);
+      syncSqlBlock({ tags: nextTags });
     }
     setTagInput("");
   }
@@ -86,7 +131,20 @@ export default function Home() {
   }
 
   function removeTag(tagToRemove: string) {
-    setTags((currentTags) => currentTags.filter((tag) => tag !== tagToRemove));
+    const nextTags = tags.filter((tag) => tag !== tagToRemove);
+    setTags(nextTags);
+    syncSqlBlock({ tags: nextTags });
+  }
+
+  function toggleEnabled() {
+    const next = !isEnabled;
+    setIsEnabled(next);
+    syncSqlBlock({ isEnabled: next });
+  }
+
+  function selectMaterialization(option: (typeof materializationOptions)[number]) {
+    setMaterialization(option);
+    syncSqlBlock({ materialization: option });
   }
 
   async function refreshGitHubState() {
@@ -275,104 +333,155 @@ export default function Home() {
     <div className="relative min-h-screen overflow-hidden bg-background">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(1200px_circle_at_top,_rgba(15,23,42,0.12),_transparent_60%)] dark:bg-[radial-gradient(1200px_circle_at_top,_rgba(148,163,184,0.18),_transparent_60%)]" />
       <main className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12 sm:px-10">
-        <div className="space-y-3">
-          <span className="inline-flex w-fit items-center rounded-full border border-border/70 bg-card/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground backdrop-blur">
-            New dbt model
-          </span>
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            Create model configuration
-          </h1>
-          <p className="max-w-3xl text-muted-foreground">
-            Draft your model SQL and configure key model properties before generating
-            scaffold files.
-          </p>
-        </div>
-
-        <section className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-lg font-medium">GitHub integration</h2>
-            {isSessionPending ? (
-              <span className="text-sm text-muted-foreground">Checking session...</span>
-            ) : isAuthed ? (
-              <span className="text-sm text-muted-foreground">
-                Signed in as {session?.user.email ?? "GitHub user"}
-              </span>
-            ) : (
-              <span className="text-sm text-muted-foreground">Sign in required</span>
-            )}
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {isAuthed ? (
-              <>
-                <Button type="button" onClick={signOut}>
-                  Sign out
-                </Button>
-                <Button type="button" variant="outline" onClick={installGitHubApp} disabled={isBusy}>
-                  Install GitHub App
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void refreshGitHubState()}
-                  disabled={isBusy}
-                >
-                  Refresh installations
-                </Button>
-              </>
-            ) : (
-              <Button type="button" onClick={signInWithGitHub}>
-                Login with GitHub
-              </Button>
-            )}
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-3">
+            <span className="inline-flex w-fit items-center rounded-full border border-border/70 bg-card/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground backdrop-blur">
+              New dbt model
+            </span>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+              Create model configuration
+            </h1>
+            <p className="max-w-3xl text-muted-foreground">
+              Draft your model SQL and configure key model properties before generating
+              scaffold files.
+            </p>
           </div>
 
-          {isAuthed ? (
-            <div className="mt-4 space-y-3">
-              {installations.map((installation) => (
-                <div key={installation.installationId} className="rounded-xl border border-border p-3">
-                  <p className="text-sm font-medium">
-                    Installation {installation.installationId}
-                    {installation.accountLogin ? ` - ${installation.accountLogin}` : ""}
-                  </p>
-                  {installation.error ? (
-                    <p className="mt-2 text-sm text-destructive">{installation.error}</p>
-                  ) : installation.repositories.length > 0 ? (
-                    <div className="mt-2 space-y-2">
-                      {installation.repositories.map((repo) => (
-                        <div
-                          key={repo.id}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-3 py-2"
+          <Dialog.Root>
+            <Dialog.Trigger
+              className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-border/70 bg-card/80 px-3 py-1.5 text-xs font-medium text-foreground shadow-sm backdrop-blur transition hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <span className={`inline-block size-2 rounded-full ${statusBadge.dot}`} />
+              <span className="text-muted-foreground">GitHub:</span>
+              <span>{statusBadge.label}</span>
+            </Dialog.Trigger>
+            <Dialog.Portal>
+              <Dialog.Backdrop className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 transition-opacity duration-150" />
+              <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-[min(90vw,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-card p-6 shadow-xl outline-none data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 transition-all duration-150">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <Dialog.Title className="text-lg font-medium">
+                      GitHub integration
+                    </Dialog.Title>
+                    <Dialog.Description className="mt-1 text-sm text-muted-foreground">
+                      {isSessionPending
+                        ? "Checking session…"
+                        : isAuthed
+                          ? `Signed in as ${session?.user.email ?? "GitHub user"}`
+                          : "Sign in to connect a repository."}
+                    </Dialog.Description>
+                  </div>
+                  <Dialog.Close className="rounded-md px-2 py-1 text-sm text-muted-foreground transition hover:bg-accent/40 hover:text-foreground">
+                    Close
+                  </Dialog.Close>
+                </div>
+
+                <div className="mt-5 max-h-[60vh] space-y-4 overflow-auto pr-1">
+                  <div className="flex flex-wrap gap-2">
+                    {isAuthed ? (
+                      <>
+                        <Button type="button" onClick={signOut}>
+                          Sign out
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={installGitHubApp}
+                          disabled={isBusy}
                         >
-                          <span className="text-sm">{repo.fullName}</span>
-                          {repo.connected ? (
-                            <span className="text-xs font-medium text-muted-foreground">Connected</span>
+                          Install GitHub App
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void refreshGitHubState()}
+                          disabled={isBusy}
+                        >
+                          Refresh installations
+                        </Button>
+                      </>
+                    ) : (
+                      <Button type="button" onClick={signInWithGitHub}>
+                        Login with GitHub
+                      </Button>
+                    )}
+                  </div>
+
+                  {isAuthed ? (
+                    <div className="space-y-3">
+                      {installations.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No GitHub App installations found yet. Install the app to connect a
+                          repository.
+                        </p>
+                      ) : null}
+                      {installations.map((installation) => (
+                        <div
+                          key={installation.installationId}
+                          className="rounded-xl border border-border p-3"
+                        >
+                          <p className="text-sm font-medium">
+                            Installation {installation.installationId}
+                            {installation.accountLogin ? ` - ${installation.accountLogin}` : ""}
+                          </p>
+                          {installation.error ? (
+                            <p className="mt-2 text-sm text-destructive">{installation.error}</p>
+                          ) : installation.repositories.length > 0 ? (
+                            <div className="mt-2 space-y-2">
+                              {installation.repositories.map((repo) => (
+                                <div
+                                  key={repo.id}
+                                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-3 py-2"
+                                >
+                                  <span className="text-sm">{repo.fullName}</span>
+                                  {repo.connected ? (
+                                    <span className="text-xs font-medium text-emerald-600">
+                                      Connected
+                                    </span>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={isBusy}
+                                      onClick={() =>
+                                        void connectRepository(
+                                          installation.installationId,
+                                          repo.id,
+                                        )
+                                      }
+                                    >
+                                      Connect
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           ) : (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={isBusy}
-                              onClick={() =>
-                                void connectRepository(installation.installationId, repo.id)
-                              }
-                            >
-                              Connect
-                            </Button>
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              No repositories granted.
+                            </p>
                           )}
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="mt-2 text-sm text-muted-foreground">No repositories granted.</p>
-                  )}
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          ) : null}
+              </Dialog.Popup>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </div>
 
-          {statusMessage ? <p className="mt-4 text-sm text-emerald-600">{statusMessage}</p> : null}
-          {errorMessage ? <p className="mt-2 text-sm text-destructive">{errorMessage}</p> : null}
-        </section>
+        {statusMessage || errorMessage ? (
+          <div className="space-y-1">
+            {statusMessage ? (
+              <p className="text-sm text-emerald-600">{statusMessage}</p>
+            ) : null}
+            {errorMessage ? (
+              <p className="text-sm text-destructive">{errorMessage}</p>
+            ) : null}
+          </div>
+        ) : null}
 
         <form className="grid gap-6 lg:grid-cols-[1.3fr_0.9fr]">
           <section className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
@@ -443,42 +552,6 @@ export default function Home() {
 
             <div className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
               <div className="mb-4">
-                <h2 className="text-lg font-medium text-foreground">Draft PR</h2>
-                <p className="text-sm text-muted-foreground">
-                  Creates a fresh branch from the default branch and opens a draft PR.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <input
-                  value={generatedPath}
-                  onChange={(event) => setGeneratedPath(event.target.value)}
-                  placeholder="models/generated/new_model.sql"
-                  className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
-                />
-                <input
-                  value={prTitle}
-                  onChange={(event) => setPrTitle(event.target.value)}
-                  placeholder="PR title"
-                  className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-ring"
-                />
-                <textarea
-                  value={prBody}
-                  onChange={(event) => setPrBody(event.target.value)}
-                  placeholder="PR body"
-                  className="min-h-20 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-ring"
-                />
-                <Button
-                  type="button"
-                  disabled={!activeConnection || isBusy}
-                  onClick={createDraftPr}
-                >
-                  Create draft PR
-                </Button>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur sm:p-6">
-              <div className="mb-4">
                 <h2 className="text-lg font-medium text-foreground">Enabled</h2>
                 <p className="text-sm text-muted-foreground">
                   Control whether this model should run.
@@ -488,7 +561,7 @@ export default function Home() {
                 type="button"
                 role="switch"
                 aria-checked={isEnabled}
-                onClick={() => setIsEnabled((currentState) => !currentState)}
+                onClick={toggleEnabled}
                 className="inline-flex w-full items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium transition hover:bg-accent/40"
               >
                 <span>{isEnabled ? "Enabled" : "Disabled"}</span>
@@ -560,7 +633,7 @@ export default function Home() {
                       name="materialization"
                       value={option}
                       checked={materialization === option}
-                      onChange={() => setMaterialization(option)}
+                      onChange={() => selectMaterialization(option)}
                       className="h-4 w-4 accent-primary"
                     />
                     <span className="capitalize">{option}</span>
